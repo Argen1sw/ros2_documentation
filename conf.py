@@ -19,8 +19,11 @@
 
 import itertools
 import os
+import re
 import sys
 import time
+from typing import Dict
+from typing import Text
 
 from docutils.parsers.rst import Directive
 
@@ -308,8 +311,8 @@ def github_link_rewrite_branch(app, pagename, templatename, context, doctree):
 
 def expand_macros(app, docname, source):
     result = source[0]
-    for key, value in app.config.macros.items():
-        result = result.replace(f'{{{key}}}', value)
+    result = expand_interface_macros(result)
+    result = expand_text_macros(result, app.config.macros)
     source[0] = result
 
 def setup(app):
@@ -319,3 +322,61 @@ def setup(app):
     app.add_config_value('smv_eol_versions', [], 'html')
     app.add_config_value('macros', {}, True)
     RedirectFrom.register(app)
+
+# Regex to match 'pkg_msgs/msg/Msg' and extract (1) 'pkg_msgs' and (2) 'msg/Msg'
+interface_name_exp = r'([A-z0-9_]+)/((?:(msg|srv|action)/[A-z0-9_]+))'
+# Regex for '{interface_link(...)}'
+interface_link_regex = re.compile(r'{interface_link\(' + interface_name_exp + r'\)}')
+# Regex for '{interface(...)}'
+interface_regex = re.compile(r'{interface\(' + interface_name_exp + r'\)}')
+# Template for the link to the interface documentation (msg, srv, action)
+interface_link_templ = 'https://docs.ros.org/en/{{DISTRO}}/p/{pkg_name}/interfaces/{interface_rel_name}.html'
+# Template for an RST link to the interface documentation
+interface_rst_link_templ = f'`{{interface_name}} <{interface_link_templ}>`_'
+
+def expand_interface_macros(text: Text) -> Text:
+    """
+    Expand `{interface()}` and `{interface_link()}` macros.
+
+    Uses the `{DISTRO}` macro in its expansion, so it has to be expanded after.
+
+    :param text: the text to expand
+    :return: the expanded text
+    """
+    # {interface()}
+    while match := interface_regex.search(text):
+        pkg_name = match.group(1)
+        interface_rel_name = match.group(2)
+        interface_name = f'{pkg_name}/{interface_rel_name}'
+        link = interface_rst_link_templ.format(
+            interface_name=interface_name,
+            pkg_name=pkg_name,
+            interface_rel_name=interface_rel_name,
+        )
+        text = text.replace(match.group(0), link)
+
+    # {interface_link()}
+    while match := interface_link_regex.search(text):
+        pkg_name = match.group(1)
+        interface_rel_name = match.group(2)
+        interface_name = f'{pkg_name}/{interface_rel_name}'
+        link = interface_link_templ.format(
+            pkg_name=pkg_name,
+            interface_rel_name=interface_rel_name,
+        )
+        text = text.replace(match.group(0), link)
+
+    return text
+
+def expand_text_macros(text: Text, macros: Dict[Text, Text]) -> Text:
+    """
+    Expand text macros, e.g., `{DISTRO}`.
+
+    :param text: the text to expand
+    :param macros: the mapping from macro name to value to use for expansion
+    :return: the expanded text
+    """
+    # Expand simple {macros}
+    for key, value in macros.items():
+        text = text.replace(f'{{{key}}}', value)
+    return text
